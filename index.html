@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Juego Torre de Control - Corregido (nariz según movimiento)</title>
+  <style>
+    :root{
+      --header-h:64px;
+      --sky:#87CEEB;
+      --plane-size:28px;
+      --runway-width:360px;
+      --runway-height:60px;
+    }
+    html,body{height:100%;margin:0;font-family:Inter, Roboto, Arial, Helvetica, sans-serif;color:#07203a}
+    header{
+      height:var(--header-h);display:flex;align-items:center;gap:10px;padding:8px 12px;
+      background:linear-gradient(180deg,#ffffffcc,#f0f0f0cc);position:fixed;left:0;right:0;top:0;z-index:300;
+      box-shadow:0 2px 8px rgba(0,0,0,0.08)
+    }
+    header button{padding:8px 10px;border-radius:8px;border:1px solid rgba(0,0,0,0.08);background:#fff;cursor:pointer}
+    #controls{display:flex;gap:12px;align-items:center;margin-left:8px}
+    #game{position:fixed;top:var(--header-h);left:0;right:0;bottom:0;background:var(--sky);overflow:hidden}
+    #airport{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:50}
+    .runway{width:var(--runway-width);height:var(--runway-height);background:linear-gradient(180deg,#333,#222);border-radius:6px;position:relative;box-shadow:0 6px 18px rgba(0,0,0,0.25)}
+    .runway::before{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:80%;height:6px;background:repeating-linear-gradient(90deg,#fff 0 12px, transparent 12px 24px);opacity:0.9}
+    .runway::after{content:'Pista';position:absolute;left:50%;top:50%;transform:translate(-50%,-25px);color:#fff;font-weight:600;font-size:12px}
+    #planes{position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none}
+
+    .plane{
+      position:absolute; width:var(--plane-size); height:var(--plane-size);
+      transform-origin:center center; pointer-events:auto; z-index:100;
+      display:flex;align-items:center;justify-content:center;overflow:visible;
+    }
+    .plane .icon{width:var(--plane-size);height:var(--plane-size);transition:transform 3.95s linear;transform-origin:center center;display:block}
+    /* SVG de avión orientado hacia la derecha por defecto (0° = derecha) */
+    .plane .tag{
+      position:absolute; left:50%; top:0; transform:translate(-50%,-140%);
+      white-space:nowrap; background:transparent; color:#fff; font-size:11px; text-shadow:1px 1px 2px rgba(0,0,0,0.8);
+      pointer-events:none;
+    }
+    .plane.selected .tag{
+      background:#fff7d6;color:#07203a;padding:4px 8px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.12);
+    }
+    .plane.warning{filter:drop-shadow(0 0 6px red)}
+    .plane.danger{filter:drop-shadow(0 0 10px blue)}
+
+    .modal{display:none;position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;z-index:500}
+    .card{background:#fff;padding:16px;border-radius:10px;min-width:280px;max-width:920px}
+    .close{position:absolute;right:12px;top:8px;cursor:pointer;padding:6px;border-radius:6px;background:#eee}
+    .statusBox{margin-left:auto;display:flex;gap:10px;align-items:center}
+    .statusSmall{background:#fff;padding:6px 8px;border-radius:8px;border:1px solid rgba(0,0,0,0.06)}
+    input[type=range]{width:140px}
+    @media (max-width:700px){.plane .tag{font-size:10px}}
+  </style>
+</head>
+<body>
+  <header>
+    <button id="btnTutorial">❔ Tutorial</button>
+    <button id="btnStart">▶ Iniciar</button>
+    <button id="btnPause">⏸ Pausar</button>
+    <button id="btnMic">🎤</button>
+
+    <div id="controls">
+      <label for="spawnRate">Aviones:</label>
+      <input id="spawnRate" type="range" min="0" max="6" step="1" value="2">
+      <span id="spawnVal">2</span>
+    </div>
+
+    <div class="statusBox">
+      <div class="statusSmall">En radar: <strong id="countRadar">0</strong></div>
+      <div class="statusSmall">Aterrizados: <strong id="countLanded">0</strong></div>
+      <div class="statusSmall">Seleccionado: <strong id="selName">N/A</strong></div>
+    </div>
+  </header>
+
+  <div id="game">
+    <div id="airport"><div class="runway"></div></div>
+    <div id="planes"></div>
+  </div>
+
+  <!-- Tutorial modal -->
+  <div id="modalTutorial" class="modal" role="dialog" aria-hidden="true">
+    <div class="card">
+      <div class="close" id="closeTutorial">✕</div>
+      <h3>Tutorial</h3>
+      <p>Presiona Iniciar. Selecciona un avión haciendo click sobre él. Usa el micrófono (G o botón) y di comandos como: "velocidad 150", "rumbo 90", "altitud 8000".</p>
+    </div>
+  </div>
+
+  <!-- Collision modal -->
+  <div id="modalCollision" class="modal" role="dialog" aria-hidden="true">
+    <div class="card">
+      <div class="close" id="closeCollision">✕</div>
+      <h3>Colisión detectada</h3>
+      <div id="collisionDetails"></div>
+    </div>
+  </div>
+
+  <script>
+  /* ----------------------------------------------------------
+     Versión corregida: 
+     - Mantiene tu código original (voz, colisiones, spawn control, modales).
+     - Corrige la orientación del icono para que la **nariz** del avión 
+       apunte exactamente en la dirección del movimiento (vx,vy).
+     - La SVG del icono está orientada por defecto hacia la **derecha**
+       (0° = derecha) para evitar offsets extra.
+     - Si aún ves la nariz invertida, cambia SVG_ROTATION_ADJUST.
+     ---------------------------------------------------------- */
+
+  // ========== CONFIG ==========
+  const KNOT_TO_PPS = 0.02; // escala (puedes ajustar si quieres más rápido)
+  const BASE_SPAWN_INTERVAL = 3000;
+  const AIRLINES = ["Latam","Avianca","Sky","Peruvian","Iberia","American","Delta","JetSmart","Gol"];
+  const SVG_ROTATION_ADJUST = 0; // Ajuste extra si tu SVG está orientado distinto (0,90,-90,180)
+
+  // elementos
+  const planeContainer = document.getElementById('planes');
+  const game = document.getElementById('game');
+  const airport = document.getElementById('airport');
+  const runway = document.querySelector('.runway');
+  const spawnRateInput = document.getElementById('spawnRate');
+  const spawnVal = document.getElementById('spawnVal');
+  const countRadarEl = document.getElementById('countRadar');
+  const countLandedEl = document.getElementById('countLanded');
+  const selNameEl = document.getElementById('selName');
+
+  // estado
+  let planes = new Map();     // id -> plane
+  let running = false;
+  let lastTime = null;
+  let spawnTimer = 0;
+  let planeIdCounter = 1;
+  let landedCount = 0;
+  let recognition = null;
+  let listening = false;
+  let selectedPlaneId = null;
+
+  // ========== HELPERS ==========
+  function rand(min,max){ return Math.random()*(max-min)+min; }
+  function choose(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+  function sanitizeHeading(h){ let hh = Number(h) % 360; if(isNaN(hh)) hh = 0; if(hh<0) hh+=360; return hh; }
+  function formatNumber(n){ return n.toLocaleString('en-US'); }
+  function extractNumber(text){
+    const m = text.match(/([0-9]+(?:[.,][0-9]*)?)/);
+    if(m){
+      return parseInt(m[1].replace(/[.,]/g,''),10);
+    }
+    return null;
+  }
+
+  // ========== VISUAL UPDATE ==========
+  // Actualiza posición, texto y rotación del icono según VECTOR de velocidad
+  function updatePlaneVisual(pl){
+    if(!pl || !pl.el) return;
+    // posicionar el contenedor
+    pl.el.style.transform = `translate(${pl.x}px, ${pl.y}px)`;
+
+    // calcular ángulo real del vector de movimiento (vx, vy)
+    // si vx/vy no existen (speed 0) calcular desde heading
+    let vx = pl.vx, vy = pl.vy;
+    if(typeof vx !== 'number' || typeof vy !== 'number'){
+      const rad = pl.heading * Math.PI / 180;
+      vx = Math.cos(rad) * pl.speed * KNOT_TO_PPS;
+      vy = Math.sin(rad) * pl.speed * KNOT_TO_PPS;
+      pl.vx = vx; pl.vy = vy;
+    }
+
+    // atan2 devuelve ángulo en rad respecto al eje X (derecha = 0)
+    let angleDeg = Math.atan2(vy, vx) * 180 / Math.PI;
+    if(!isFinite(angleDeg)) angleDeg = pl.heading; // fallback
+    // aplicar ajuste si la SVG necesita rotación extra
+    const finalAngle = angleDeg + SVG_ROTATION_ADJUST;
+
+    const iconEl = pl.el.querySelector('.icon');
+    if(iconEl){
+      iconEl.style.transform = `rotate(${finalAngle}deg)`;
+    }
+
+    const tag = pl.el.querySelector('.tag');
+    if(tag){
+      tag.innerHTML = `${pl.name}<br>Vel ${Math.round(pl.speed)} nudos · Rum ${Math.round(pl.heading)}° · Alt ${formatNumber(pl.altitude)} ft`;
+    }
+  }
+
+  // recalcula vx,vy a partir de heading y speed (en nudos)
+  function recalcVelocity(pl){
+    const rad = pl.heading * Math.PI / 180;
+    pl.vx = Math.cos(rad) * pl.speed * KNOT_TO_PPS;
+    pl.vy = Math.sin(rad) * pl.speed * KNOT_TO_PPS;
+  }
+
+  // ========== CREAR AVIÓN ==========
+  function createPlane(){
+    const id = 'p' + (planeIdCounter++);
+    const airline = choose(AIRLINES);
+    const flightNum = String(Math.floor(rand(100,999)));
+    const name = `${airline} ${flightNum}`;
+
+    // spawn from edges
+    const w = game.clientWidth, h = game.clientHeight;
+    const edge = Math.floor(rand(0,4));
+    let x,y,heading;
+    if(edge === 0){ x = rand(20,w-20); y = -40; heading = rand(20,160); }          // top -> downward
+    else if(edge === 1){ x = w+40; y = rand(20,h-20); heading = rand(110,250); }  // right -> leftish
+    else if(edge === 2){ x = rand(20,w-20); y = h+40; heading = rand(200,340); }  // bottom -> upward
+    else { x = -40; y = rand(20,h-20); heading = rand(-70,70); }                 // left -> rightish
+
+    const speed = 120; // nudos por defecto
+    const altitude = Math.floor(rand(4000,34000));
+
+    // crear DOM (SVG orientado a la DERECHA por defecto)
+    const el = document.createElement('div');
+    el.className = 'plane';
+    el.dataset.id = id;
+    el.style.left = '0px'; el.style.top = '0px';
+
+    el.innerHTML = `
+ <div class="icon" aria-hidden="true">
+  <svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+    <!-- Fuselaje principal -->
+    <rect x="10" y="34" width="90" height="12" rx="6" fill="black"/>
+    
+    <!-- Nariz -->
+    <circle cx="100" cy="40" r="6" fill="black"/>
+    
+    <!-- Cola vertical -->
+    <polygon points="10,34 4,28 4,52 10,46" fill="black"/>
+    
+    <!-- Alas principales (centradas) -->
+    <polygon points="50,28 20,12 22,20 50,36" fill="black"/>
+    <polygon points="50,52 20,68 22,60 50,44" fill="black"/>
+    
+    <!-- Motores simplificados (óvalos pequeños bajo alas) -->
+    <ellipse cx="32" cy="26" rx="3" ry="5" fill="black"/>
+    <ellipse cx="38" cy="28" rx="3" ry="5" fill="black"/>
+    <ellipse cx="32" cy="54" rx="3" ry="5" fill="black"/>
+    <ellipse cx="38" cy="52" rx="3" ry="5" fill="black"/>
+    
+    <!-- Cola horizontal -->
+    <polygon points="14,30 6,20 10,20 18,30" fill="black"/>
+    <polygon points="14,50 6,60 10,60 18,50" fill="black"/>
+  </svg>
+</div>
+
+      <div class="tag">${name}<br>Vel ${speed} nudos · Rum ${Math.round(heading)}° · Alt ${altitude} ft</div>
+    `;
+
+    planeContainer.appendChild(el);
+
+    const plane = {
+      id, name, flightNum, airline,
+      x, y, heading: sanitizeHeading(heading), speed, altitude,
+      vx: 0, vy: 0, el
+    };
+
+    recalcVelocity(plane);
+    updatePlaneVisual(plane);
+
+    // click -> seleccionar
+    el.addEventListener('click', (ev)=>{
+      selectPlane(plane.id);
+      ev.stopPropagation();
+    });
+
+    planes.set(plane.id, plane);
+    updateCounts();
+
+    // pequeña comunicación de aproximación
+    setTimeout(()=>{
+      if(planes.has(plane.id)){
+        speak(`${plane.name} solicita aproximación.`);
+      }
+    }, 7000);
+
+    return plane;
+  }
+
+  // ========== SELECCIÓN ==========
+  function selectPlane(id){
+    // limpiar selección previa
+    if(selectedPlaneId && planes.has(selectedPlaneId)){
+      planes.get(selectedPlaneId).el.classList.remove('selected');
+    }
+    selectedPlaneId = id;
+    if(planes.has(id)){
+      const pl = planes.get(id);
+      pl.el.classList.add('selected');
+      selNameEl.textContent = pl.name;
+      updatePlaneVisual(pl);
+    } else {
+      selNameEl.textContent = 'N/A';
+    }
+  }
+
+  // ========== TTS ==========
+  function speak(text, opts={rate:1}){
+    if('speechSynthesis' in window){
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'es-ES'; u.rate = opts.rate || 1;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } else {
+      console.log('TTS:', text);
+    }
+  }
+
+  // ========== BUCLE PRINCIPAL ==========
+  function loop(ts){
+    if(!running){ lastTime = ts; requestAnimationFrame(loop); return; }
+    if(!lastTime) lastTime = ts;
+    const dt = (ts - lastTime) / 1000;
+    lastTime = ts;
+
+    // spawn control según slider
+    // ...
+    // spawn control según slider
+    const spawnRate = parseInt(spawnRateInput.value,10) || 0;
+    const interval = BASE_SPAWN_INTERVAL / Math.max(1, spawnRate);
+    spawnTimer += dt * 1000;
+    if(spawnRate > 0 && spawnTimer > interval){
+      createPlane();
+      
+      // REINICIO ALEATORIO:
+      // Reinicia el timer con un offset aleatorio del +/- 20% del intervalo.
+      // Así el siguiente avión aparecerá en [interval * 0.8, interval * 1.2]
+      const randomOffset = rand(-interval * 0.2, interval * 0.2);
+      spawnTimer = randomOffset; 
+    }
+    // ...
+
+    // mover aviones
+    const toRemove = [];
+    const gameRect = game.getBoundingClientRect();
+    const runwayRect = runway.getBoundingClientRect();
+
+    planes.forEach((pl)=>{
+      // asegurarse vx/vy actualizados (por si se cambiaron speed/heading)
+      recalcVelocity(pl);
+
+      // mover
+      pl.x += pl.vx * dt;
+      pl.y += pl.vy * dt;
+
+      // actualizar visual
+      updatePlaneVisual(pl);
+
+      // quitar si sale mucho de la pantalla
+      const margin = 160;
+      if(pl.x < -margin || pl.x > game.clientWidth + margin || pl.y < -margin || pl.y > game.clientHeight + margin){
+        toRemove.push(pl.id);
+      }
+
+      // Chequeo de aterrizaje: si está dentro del rectángulo de la pista (aprox)
+      // Convertir coords locales:
+      const px = pl.x + gameRect.left;
+      const py = pl.y + gameRect.top;
+      const centerX = gameRect.left + gameRect.width / 2;
+      const centerY = gameRect.top + gameRect.height / 2;
+      const relX = px - centerX;
+      const relY = py - centerY;
+      const runwayHalfW = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--runway-width')) || 360) / 2;
+      const runwayHalfH = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--runway-height')) || 60) / 2 + 20;
+      const inRunwayBox = Math.abs(relX) < runwayHalfW && Math.abs(relY) < runwayHalfH;
+
+      const alignedWithRunway = (Math.abs(((pl.heading+360)%360) - 180) < 15) || (Math.abs(((pl.heading+360)%360) - 0) < 15);
+
+      if(inRunwayBox && pl.speed >= 120 && pl.altitude <= 1000 && alignedWithRunway){
+        // aterrizó
+        landedCount++;
+        playLanding(pl);
+        toRemove.push(pl.id);
+      }
+    });
+
+    // remover aviones marcados
+    toRemove.forEach(id=>{
+      if(planes.has(id)){
+        const p = planes.get(id);
+        p.el.remove();
+        planes.delete(id);
+      }
+    });
+
+    // detección de proximidad/colisión (pairwise)
+    // ================== DETECCIÓN MEJORADA CON SONIDO ==================
+const WARNING_SOUND = new Audio(''); // tu archivo de radar
+WARNING_SOUND.volume = 0.3; // volumen bajo
+const WARNING_DIST = 60;      // píxeles para advertencia
+const WARNING_ALT = 2000;     // pies de diferencia para advertencia
+const DANGER_DIST = 12;       // píxeles para choque
+const DANGER_ALT = 1000;      // pies de diferencia para choque
+
+planes.forEach((a)=>{
+  let anyNear = false; // para limpiar clase warning si ya no hay cercano
+  planes.forEach((b)=>{
+    if(a === b) return;
+    
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);  // distancia real
+    const altDiff = Math.abs(a.altitude - b.altitude);
+
+    // choque real
+    if(dist < DANGER_DIST && altDiff < DANGER_ALT){
+      a.el.classList.add('danger');
+      b.el.classList.add('danger');
+      showCollisionModal([a,b]);
+    }
+    // advertencia
+    else if(dist < WARNING_DIST && altDiff < WARNING_ALT){
+      a.el.classList.add('warning');
+      b.el.classList.add('warning');
+      anyNear = true;
+      
+      // disparar sonido solo una vez por frame
+      if(!a.warningSoundPlayed){
+        WARNING_SOUND.currentTime = 0;
+        WARNING_SOUND.play();
+        speak(`Advertencia: 2 aviones cerca`);
+        a.warningSoundPlayed = true;
+      }
+    }
+  });
+
+  // limpiar advertencia si ya no hay cercano
+  if(!anyNear){
+    a.el.classList.remove('warning');
+    a.warningSoundPlayed = false;
+  }
+});
+
+    const ids = Array.from(planes.keys());
+    for(let i=0;i<ids.length;i++){
+      for(let j=i+1;j<ids.length;j++){
+        const a = planes.get(ids[i]);
+        const b = planes.get(ids[j]);
+        if(!a||!b) continue;
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const dist2 = dx*dx + dy*dy;
+        const altDiff = Math.abs(a.altitude - b.altitude);
+
+        if(dist2 < 12*12 && altDiff < 1000){
+          // choque
+          a.el.classList.add('danger'); b.el.classList.add('danger');
+          showCollisionModal([a,b]);
+        } else if(dist2 < 190*190 && altDiff < 2000){
+          a.el.classList.add('warning'); b.el.classList.add('warning');
+          // anuncio breve (no spamear mucho)
+          // (no repeating speak too often)
+        } else {
+          // quitar clases si no en proximidad (dejamos que loop limpie)
+        }
+      }
+    }
+
+    // limpiar clases de aviso si ya no están cerca
+    planes.forEach((p)=>{
+      let anyNear = false;
+      planes.forEach((q)=>{ if(p===q) return; const dx=p.x-q.x, dy=p.y-q.y; if(dx*dx+dy*dy < 60*60) anyNear = true; });
+      if(!anyNear){ p.el.classList.remove('warning'); p.el.classList.remove('danger'); }
+    });
+
+    updateCounts();
+    requestAnimationFrame(loop);
+  }
+
+  function playLanding(pl){
+    speak(`${pl.name} ha aterrizado.`);
+  }
+
+  function showCollisionModal(list){
+    if(!list || list.length < 2) return;
+    const details = document.getElementById('collisionDetails');
+    details.innerHTML = '';
+    list.forEach(p=>{
+      const d = document.createElement('div');
+      d.style.padding = '6px 0';
+      d.innerHTML = `<strong>${p.name}</strong> — Vel ${Math.round(p.speed)} nudos · Rum ${Math.round(p.heading)}° · Alt ${formatNumber(p.altitude)} ft`;
+      details.appendChild(d);
+    });
+    document.getElementById('modalCollision').style.display = 'flex';
+    // pausa el juego
+    running = false;
+    speak('Colisión detectada.');
+  }
+
+  // ========== VOZ (SpeechRecognition) ==========
+  function setupRecognition(){
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!SR){
+      alert('Reconocimiento de voz no soportado en este navegador.');
+      return null;
+    }
+    const r = new SR();
+    r.lang = 'es-PE';
+    r.interimResults = false;
+    r.maxAlternatives = 1;
+
+    r.onresult = (evt) => {
+      const txt = evt.results[0][0].transcript.trim();
+      console.log('Voz ->', txt);
+      handleTranscript(txt);
+    };
+    r.onend = () => {
+      listening = false;
+      document.getElementById('btnMic').textContent = '🎤';
+    };
+    r.onerror = (e) => {
+      console.warn('Speech error', e);
+      listening = false;
+      document.getElementById('btnMic').textContent = '🎤';
+    };
+    return r;
+  }
+
+  function toggleListening(){
+    if(!recognition) recognition = setupRecognition();
+    if(!recognition) return;
+    if(listening){ recognition.stop(); listening=false; document.getElementById('btnMic').textContent='🎤'; }
+    else { recognition.start(); listening=true; document.getElementById('btnMic').textContent='🎙️'; }
+  }
+
+  function findPlaneByName(text){
+    for(const [id,p] of planes.entries()){
+      if(p.name.toLowerCase() === text.toLowerCase()) return p;
+    }
+    return null;
+  }
+
+  function handleTranscript(txt){
+    const low = txt.toLowerCase();
+    // si nombran avión exacto, seleccionar
+    const maybe = findPlaneByName(txt);
+    if(maybe){
+      selectPlane(maybe.id); speak(`${maybe.name} seleccionado.`); return;
+    }
+
+    // comandos: velocidad, rumbo, altitud
+    const n = extractNumber(low);
+    if(low.includes('velocidad') || low.includes('vel')){
+      if(!selectedPlaneId || !planes.has(selectedPlaneId)){ speak('Primero selecciona un avión.'); return; }
+      if(n === null){ speak('No encontré el número de velocidad.'); return; }
+      const pl = planes.get(selectedPlaneId);
+      pl.speed = n;
+      recalcVelocity(pl);
+      updatePlaneVisual(pl);
+      speak(`Velocidad de ${pl.name} ajustada a ${n} nudos.`);
+      return;
+    }
+    if(low.includes('rumbo') || low.includes('rumbo a') || low.includes('rumbo,') ){
+      if(!selectedPlaneId || !planes.has(selectedPlaneId)){ speak('Primero selecciona un avión.'); return; }
+      if(n === null){ speak('No encontré el número de rumbo.'); return; }
+      const pl = planes.get(selectedPlaneId);
+      pl.heading = sanitizeHeading(n);
+      recalcVelocity(pl);
+      updatePlaneVisual(pl);
+      speak(`Rumbo de ${pl.name} ajustado a ${n} grados.`);
+      return;
+    }
+    if(low.includes('altitud') || low.includes('pies')){
+      if(!selectedPlaneId || !planes.has(selectedPlaneId)){ speak('Primero selecciona un avión.'); return; }
+      if(n === null){ speak('No encontré el número de altitud.'); return; }
+      const pl = planes.get(selectedPlaneId);
+      pl.altitude = n;
+      updatePlaneVisual(pl);
+      speak(`Altitud de ${pl.name} ajustada a ${formatNumber(n)} pies.`);
+      return;
+    }
+
+    speak('No entendí el comando.');
+  }
+
+  // ========== CONTROLES UI ==========
+  document.getElementById('btnStart').addEventListener('click', ()=>{ running = true; lastTime = null; requestAnimationFrame(loop); });
+  document.getElementById('btnPause').addEventListener('click', ()=>{ running = false; });
+  document.getElementById('btnMic').addEventListener('click', ()=>{ toggleListening(); });
+  document.getElementById('btnTutorial').addEventListener('click', ()=>{ document.getElementById('modalTutorial').style.display = 'flex'; running = false; });
+  document.getElementById('closeTutorial').addEventListener('click', ()=>{ document.getElementById('modalTutorial').style.display = 'none'; running = true; });
+  document.getElementById('closeCollision').addEventListener('click', ()=>{ document.getElementById('modalCollision').style.display = 'none'; running = true; });
+
+  // tecla G -> mic
+  window.addEventListener('keydown', (ev)=>{ if(ev.key.toLowerCase()==='g'){ toggleListening(); } });
+
+  // spawn slider
+  spawnVal.textContent = spawnRateInput.value;
+  spawnRateInput.addEventListener('input', ()=>{ spawnVal.textContent = spawnRateInput.value; });
+
+  // update counts
+  function updateCounts(){ countRadarEl.textContent = planes.size; countLandedEl.textContent = landedCount; }
+
+  // iniciar con 3 aviones (como antes)
+  for(let i=0;i<3;i++) createPlane();
+
+  // iniciar loop (pausado hasta que el usuario haga click iniciar)
+  requestAnimationFrame(loop);
+
+  // Exponer helpers para debugging (opcional)
+  window.__tc = { planes, createPlane, selectPlane, recalcVelocity, updatePlaneVisual };
+
+  </script>
+</body>
+</html>
