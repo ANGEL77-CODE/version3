@@ -2,8 +2,8 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Juego Torre de Control - Corregido (nariz según movimiento)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" /> 
+  <title>Juego Torre de Control - Tráfico y Móvil (nariz según movimiento)</title>
   <style>
     :root{
       --header-h:64px;
@@ -13,13 +13,23 @@
       --runway-height:60px;
     }
     html,body{height:100%;margin:0;font-family:Inter, Roboto, Arial, Helvetica, sans-serif;color:#07203a}
+    
+    /* 2. MEJORA MÓVIL: Forzar pantalla completa y horizontal si es posible */
+    @media (max-width: 900px) and (orientation: portrait) {
+      /* Puedes agregar un mensaje o una capa aquí si quieres forzar la rotación */
+    }
+    
     header{
       height:var(--header-h);display:flex;align-items:center;gap:10px;padding:8px 12px;
       background:linear-gradient(180deg,#ffffffcc,#f0f0f0cc);position:fixed;left:0;right:0;top:0;z-index:300;
       box-shadow:0 2px 8px rgba(0,0,0,0.08)
     }
     header button{padding:8px 10px;border-radius:8px;border:1px solid rgba(0,0,0,0.08);background:#fff;cursor:pointer}
+    
+    /* MODIFICADO PARA EL NUEVO CONTROL */
     #controls{display:flex;gap:12px;align-items:center;margin-left:8px}
+    #controls label, #controls input{cursor:pointer;}
+    
     #game{position:fixed;top:var(--header-h);left:0;right:0;bottom:0;background:var(--sky);overflow:hidden}
     #airport{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:50}
     .runway{width:var(--runway-width);height:var(--runway-height);background:linear-gradient(180deg,#333,#222);border-radius:6px;position:relative;box-shadow:0 6px 18px rgba(0,0,0,0.25)}
@@ -50,8 +60,17 @@
     .close{position:absolute;right:12px;top:8px;cursor:pointer;padding:6px;border-radius:6px;background:#eee}
     .statusBox{margin-left:auto;display:flex;gap:10px;align-items:center}
     .statusSmall{background:#fff;padding:6px 8px;border-radius:8px;border:1px solid rgba(0,0,0,0.06)}
-    input[type=range]{width:140px}
-    @media (max-width:700px){.plane .tag{font-size:10px}}
+    
+    /* REMOVIDO: input[type=range]{width:140px} */
+    
+    @media (max-width:700px){
+      .plane .tag{font-size:10px}
+      /* Ajuste de diseño en móviles si es necesario */
+      header{gap:4px; padding:4px 8px; flex-wrap: wrap; height: auto; position: sticky;}
+      #game{top: auto; padding-top: 64px;} /* Ajusta el top de #game para que no lo tape el header envuelto */
+      .statusBox{margin-left: unset; width: 100%; justify-content: space-between; margin-top: 4px;}
+      #controls{margin-left:0;}
+    }
   </style>
 </head>
 <body>
@@ -62,11 +81,11 @@
     <button id="btnMic">🎤</button>
 
     <div id="controls">
-      <label for="spawnRate">Aviones:</label>
-      <input id="spawnRate" type="range" min="0" max="6" step="1" value="2">
-      <span id="spawnVal">2</span>
+      <label>Tráfico:</label>
+      <label><input type="radio" name="trafficLevel" value="leve" checked> Leve</label>
+      <label><input type="radio" name="trafficLevel" value="medio"> Medio</label>
+      <label><input type="radio" name="trafficLevel" value="fuerte"> Fuerte</label>
     </div>
-
     <div class="statusBox">
       <div class="statusSmall">En radar: <strong id="countRadar">0</strong></div>
       <div class="statusSmall">Aterrizados: <strong id="countLanded">0</strong></div>
@@ -79,7 +98,6 @@
     <div id="planes"></div>
   </div>
 
-  <!-- Tutorial modal -->
   <div id="modalTutorial" class="modal" role="dialog" aria-hidden="true">
     <div class="card">
       <div class="close" id="closeTutorial">✕</div>
@@ -88,7 +106,6 @@
     </div>
   </div>
 
-  <!-- Collision modal -->
   <div id="modalCollision" class="modal" role="dialog" aria-hidden="true">
     <div class="card">
       <div class="close" id="closeCollision">✕</div>
@@ -100,17 +117,17 @@
   <script>
   /* ----------------------------------------------------------
      Versión corregida: 
-     - Mantiene tu código original (voz, colisiones, spawn control, modales).
+     - Mantiene tu código original (voz, colisiones, modales).
+     - **MEJORA 1**: Control de tráfico por Checkbox (Leve, Medio, Fuerte).
+     - **MEJORA 2**: Ajustes CSS para mejor visualización en móvil (horizontal).
      - Corrige la orientación del icono para que la **nariz** del avión 
        apunte exactamente en la dirección del movimiento (vx,vy).
-     - La SVG del icono está orientada por defecto hacia la **derecha**
-       (0° = derecha) para evitar offsets extra.
-     - Si aún ves la nariz invertida, cambia SVG_ROTATION_ADJUST.
      ---------------------------------------------------------- */
 
   // ========== CONFIG ==========
   const KNOT_TO_PPS = 0.02; // escala (puedes ajustar si quieres más rápido)
-  const BASE_SPAWN_INTERVAL = 3000;
+  // BASE_SPAWN_INTERVAL es ahora solo un valor grande. El intervalo real se calcula en base al tráfico deseado por minuto.
+  const BASE_SPAWN_INTERVAL = 60000; // 60 segundos (para calcular por minuto) 
   const AIRLINES = ["Latam","Avianca","Sky","Peruvian","Iberia","American","Delta","JetSmart","Gol"];
   const SVG_ROTATION_ADJUST = 0; // Ajuste extra si tu SVG está orientado distinto (0,90,-90,180)
 
@@ -119,8 +136,8 @@
   const game = document.getElementById('game');
   const airport = document.getElementById('airport');
   const runway = document.querySelector('.runway');
-  const spawnRateInput = document.getElementById('spawnRate');
-  const spawnVal = document.getElementById('spawnVal');
+  // REMOVIDO: const spawnRateInput = document.getElementById('spawnRate');
+  // REMOVIDO: const spawnVal = document.getElementById('spawnVal');
   const countRadarEl = document.getElementById('countRadar');
   const countLandedEl = document.getElementById('countLanded');
   const selNameEl = document.getElementById('selName');
@@ -148,6 +165,41 @@
     }
     return null;
   }
+  
+  // 1. Lógica para calcular el intervalo según el tráfico
+  function calculateSpawnRate(){
+    const selectedLevel = document.querySelector('input[name="trafficLevel"]:checked').value;
+    let minPerMinute, maxPerMinute;
+
+    switch(selectedLevel){
+      case 'leve':
+        minPerMinute = 2; maxPerMinute = 3; 
+        break;
+      case 'medio':
+        minPerMinute = 4; maxPerMinute = 6; 
+        break;
+      case 'fuerte':
+        minPerMinute = 7; maxPerMinute = 9; 
+        break;
+      default:
+        return 0; // Tráfico nulo si no hay selección
+    }
+    
+    // Calcula la media deseada de aviones por minuto
+    const averagePerMinute = (minPerMinute + maxPerMinute) / 2;
+    
+    // Calcula el intervalo promedio entre aviones en milisegundos
+    // BASE_SPAWN_INTERVAL (60000ms) / averagePerMinute
+    const averageIntervalMs = BASE_SPAWN_INTERVAL / averagePerMinute;
+    
+    // Devuelve un objeto con el intervalo promedio y el rango de aleatoriedad
+    return { 
+      averageIntervalMs, 
+      minPerMinute, 
+      maxPerMinute 
+    };
+  }
+
 
   // ========== VISUAL UPDATE ==========
   // Actualiza posición, texto y rotación del icono según VECTOR de velocidad
@@ -218,26 +270,20 @@
     el.innerHTML = `
  <div class="icon" aria-hidden="true">
   <svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-    <!-- Fuselaje principal -->
     <rect x="10" y="34" width="90" height="12" rx="6" fill="black"/>
     
-    <!-- Nariz -->
     <circle cx="100" cy="40" r="6" fill="black"/>
     
-    <!-- Cola vertical -->
     <polygon points="10,34 4,28 4,52 10,46" fill="black"/>
     
-    <!-- Alas principales (centradas) -->
     <polygon points="50,28 20,12 22,20 50,36" fill="black"/>
     <polygon points="50,52 20,68 22,60 50,44" fill="black"/>
     
-    <!-- Motores simplificados (óvalos pequeños bajo alas) -->
     <ellipse cx="32" cy="26" rx="3" ry="5" fill="black"/>
     <ellipse cx="38" cy="28" rx="3" ry="5" fill="black"/>
     <ellipse cx="32" cy="54" rx="3" ry="5" fill="black"/>
     <ellipse cx="38" cy="52" rx="3" ry="5" fill="black"/>
     
-    <!-- Cola horizontal -->
     <polygon points="14,30 6,20 10,20 18,30" fill="black"/>
     <polygon points="14,50 6,60 10,60 18,50" fill="black"/>
   </svg>
@@ -312,22 +358,22 @@
     const dt = (ts - lastTime) / 1000;
     lastTime = ts;
 
-    // spawn control según slider
-    // ...
-    // spawn control según slider
-    const spawnRate = parseInt(spawnRateInput.value,10) || 0;
-    const interval = BASE_SPAWN_INTERVAL / Math.max(1, spawnRate);
-    spawnTimer += dt * 1000;
-    if(spawnRate > 0 && spawnTimer > interval){
-      createPlane();
+    // 1. Lógica de spawn mejorada con aleatoriedad (Opción 1)
+    const trafficConfig = calculateSpawnRate();
+    if(trafficConfig && trafficConfig.averageIntervalMs > 0){
+      const interval = trafficConfig.averageIntervalMs;
+      spawnTimer += dt * 1000;
       
-      // REINICIO ALEATORIO:
-      // Reinicia el timer con un offset aleatorio del +/- 20% del intervalo.
-      // Así el siguiente avión aparecerá en [interval * 0.8, interval * 1.2]
-      const randomOffset = rand(-interval * 0.2, interval * 0.2);
-      spawnTimer = randomOffset; 
+      if(spawnTimer > interval){
+        createPlane();
+        
+        // Reinicio aleatorio para que no aparezcan a cadencia perfecta
+        // Random offset de +/- 30% del intervalo promedio
+        const randomOffset = rand(-interval * 0.3, interval * 0.3);
+        spawnTimer = randomOffset; 
+      }
     }
-    // ...
+    
 
     // mover aviones
     const toRemove = [];
@@ -363,6 +409,7 @@
       const runwayHalfH = (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--runway-height')) || 60) / 2 + 20;
       const inRunwayBox = Math.abs(relX) < runwayHalfW && Math.abs(relY) < runwayHalfH;
 
+      // Ajuste de heading para pista (rumbo 0 o 180)
       const alignedWithRunway = (Math.abs(((pl.heading+360)%360) - 180) < 15) || (Math.abs(((pl.heading+360)%360) - 0) < 15);
 
       if(inRunwayBox && pl.speed >= 120 && pl.altitude <= 1000 && alignedWithRunway){
@@ -379,87 +426,61 @@
         const p = planes.get(id);
         p.el.remove();
         planes.delete(id);
+        // Si el avión removido estaba seleccionado, deseleccionar
+        if(selectedPlaneId === id) selectPlane(null); 
       }
     });
 
     // detección de proximidad/colisión (pairwise)
     // ================== DETECCIÓN MEJORADA CON SONIDO ==================
-const WARNING_SOUND = new Audio(''); // tu archivo de radar
-WARNING_SOUND.volume = 0.3; // volumen bajo
-const WARNING_DIST = 60;      // píxeles para advertencia
-const WARNING_ALT = 2000;     // pies de diferencia para advertencia
-const DANGER_DIST = 12;       // píxeles para choque
-const DANGER_ALT = 1000;      // pies de diferencia para choque
+    const WARNING_SOUND = new Audio(''); // tu archivo de radar
+    WARNING_SOUND.volume = 0.3; // volumen bajo
+    const WARNING_DIST = 60;      // píxeles para advertencia
+    const WARNING_ALT = 2000;     // pies de diferencia para advertencia
+    const DANGER_DIST = 12;       // píxeles para choque
+    const DANGER_ALT = 1000;      // pies de diferencia para choque
 
-planes.forEach((a)=>{
-  let anyNear = false; // para limpiar clase warning si ya no hay cercano
-  planes.forEach((b)=>{
-    if(a === b) return;
-    
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    const dist = Math.sqrt(dx*dx + dy*dy);  // distancia real
-    const altDiff = Math.abs(a.altitude - b.altitude);
-
-    // choque real
-    if(dist < DANGER_DIST && altDiff < DANGER_ALT){
-      a.el.classList.add('danger');
-      b.el.classList.add('danger');
-      showCollisionModal([a,b]);
-    }
-    // advertencia
-    else if(dist < WARNING_DIST && altDiff < WARNING_ALT){
-      a.el.classList.add('warning');
-      b.el.classList.add('warning');
-      anyNear = true;
-      
-      // disparar sonido solo una vez por frame
-      if(!a.warningSoundPlayed){
-        WARNING_SOUND.currentTime = 0;
-        WARNING_SOUND.play();
-        speak(`Advertencia: 2 aviones cerca`);
-        a.warningSoundPlayed = true;
-      }
-    }
-  });
-
-  // limpiar advertencia si ya no hay cercano
-  if(!anyNear){
-    a.el.classList.remove('warning');
-    a.warningSoundPlayed = false;
-  }
-});
-
-    const ids = Array.from(planes.keys());
-    for(let i=0;i<ids.length;i++){
-      for(let j=i+1;j<ids.length;j++){
-        const a = planes.get(ids[i]);
-        const b = planes.get(ids[j]);
-        if(!a||!b) continue;
-        const dx = a.x - b.x, dy = a.y - b.y;
-        const dist2 = dx*dx + dy*dy;
+    planes.forEach((a)=>{
+      let anyNear = false; // para limpiar clase warning si ya no hay cercano
+      planes.forEach((b)=>{
+        if(a === b) return;
+        
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);  // distancia real
         const altDiff = Math.abs(a.altitude - b.altitude);
 
-        if(dist2 < 12*12 && altDiff < 1000){
-          // choque
-          a.el.classList.add('danger'); b.el.classList.add('danger');
+        // choque real
+        if(dist < DANGER_DIST && altDiff < DANGER_ALT){
+          a.el.classList.add('danger');
+          b.el.classList.add('danger');
           showCollisionModal([a,b]);
-        } else if(dist2 < 190*190 && altDiff < 2000){
-          a.el.classList.add('warning'); b.el.classList.add('warning');
-          // anuncio breve (no spamear mucho)
-          // (no repeating speak too often)
-        } else {
-          // quitar clases si no en proximidad (dejamos que loop limpie)
         }
-      }
-    }
+        // advertencia
+        else if(dist < WARNING_DIST && altDiff < WARNING_ALT){
+          a.el.classList.add('warning');
+          b.el.classList.add('warning');
+          anyNear = true;
+          
+          // disparar sonido solo una vez por frame
+          if(!a.warningSoundPlayed){
+            WARNING_SOUND.currentTime = 0;
+            WARNING_SOUND.play();
+            speak(`Advertencia: 2 aviones cerca`);
+            a.warningSoundPlayed = true;
+          }
+        }
+      });
 
-    // limpiar clases de aviso si ya no están cerca
-    planes.forEach((p)=>{
-      let anyNear = false;
-      planes.forEach((q)=>{ if(p===q) return; const dx=p.x-q.x, dy=p.y-q.y; if(dx*dx+dy*dy < 60*60) anyNear = true; });
-      if(!anyNear){ p.el.classList.remove('warning'); p.el.classList.remove('danger'); }
+      // limpiar advertencia si ya no hay cercano
+      if(!anyNear){
+        a.el.classList.remove('warning');
+        a.el.classList.remove('danger'); // Limpiar danger si estaba cerca pero no chocó
+        a.warningSoundPlayed = false;
+      }
     });
+    // ================== FIN DETECCIÓN MEJORADA ==================
+
 
     updateCounts();
     requestAnimationFrame(loop);
@@ -582,21 +603,33 @@ planes.forEach((a)=>{
   // tecla G -> mic
   window.addEventListener('keydown', (ev)=>{ if(ev.key.toLowerCase()==='g'){ toggleListening(); } });
 
-  // spawn slider
-  spawnVal.textContent = spawnRateInput.value;
-  spawnRateInput.addEventListener('input', ()=>{ spawnVal.textContent = spawnRateInput.value; });
+  // REMOVIDO: spawn slider listeners
+  // spawnVal.textContent = spawnRateInput.value;
+  // spawnRateInput.addEventListener('input', ()=>{ spawnVal.textContent = spawnRateInput.value; });
 
   // update counts
   function updateCounts(){ countRadarEl.textContent = planes.size; countLandedEl.textContent = landedCount; }
 
-  // iniciar con 3 aviones (como antes)
-  for(let i=0;i<3;i++) createPlane();
-
-  // iniciar loop (pausado hasta que el usuario haga click iniciar)
+  // iniciar con el número de aviones para tráfico leve (2 o 3, elegimos 3 para empezar)
+  function init(){
+      // Limpiar aviones existentes
+      planes.forEach(p => p.el.remove());
+      planes.clear();
+      planeIdCounter = 1;
+      landedCount = 0;
+      updateCounts();
+      selectPlane(null);
+      
+      // Crear 3 aviones iniciales
+      for(let i=0;i<3;i++) createPlane();
+  }
+  
+  // Iniciar la simulación y el loop
+  init();
   requestAnimationFrame(loop);
 
   // Exponer helpers para debugging (opcional)
-  window.__tc = { planes, createPlane, selectPlane, recalcVelocity, updatePlaneVisual };
+  window.__tc = { planes, createPlane, selectPlane, recalcVelocity, updatePlaneVisual, calculateSpawnRate };
 
   </script>
 </body>
